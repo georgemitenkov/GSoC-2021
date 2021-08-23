@@ -4,15 +4,16 @@ This repository contains a summary of my Google Summer of Code 2021 experinece
 with the LLVM Compiler Infrastructure (as well as some of the current & future
 work).
 
-  - [How this repoisoty is organised](#how-this-repoisoty-is-organised)
+  - [How this repository is organised](#how-this-repository-is-organised)
   - [Motivation](#motivation)
   - [Aims](#aims)
   - [Current Results](#current-results)
   - [Contributions](#contributions)
   - [Links](#links)
+  - [Future Work](#future-work)
   - [Acknowledgement](#acknowledgement)
 
-## How this repoisoty is organised
+## How this repository is organised
 
 Since the changes I made are fundamental to LLVM, I had to work in my own fork
 of LLVM's trunk. All *ready* commits can be found in my
@@ -36,8 +37,8 @@ tutorials/resources elsewhere can use them.
 ## Contributions
 
 Below is the list of commits that I have made during the project. I decided to
-group them logically into 3 groups: LLVM IR changes, Clang changes, and
-changes in optimizations.
+group them logically into 4 groups: LLVM IR changes, Clang changes, changes in
+optimizations and the rest of changes.
 
 1. **Clang**
 
@@ -73,7 +74,7 @@ changes in optimizations.
 
    Commits:
 
-   - [[OpenMP][IR] Fixes for OpenMP codegen and tests](https://github.com/georgemitenkov/llvm-project/commit/b8ae29a5fa9c0b4e33c7c974dc47384fef823307)(*Note that changes in this commit will be reverted in the future when both byte and integer strings are be allowed!*)
+   - [[OpenMP][IR] Fixes for OpenMP codegen and tests](https://github.com/georgemitenkov/llvm-project/commit/b8ae29a5fa9c0b4e33c7c974dc47384fef823307) (*Note that changes in this commit will be reverted in the future when both byte and integer strings are be allowed!*)
 
 ## Links
 
@@ -86,6 +87,214 @@ done, what challenges I have encountered, and my further plans. It is availiable
 
 To keep track of performance numbers, I made a [spreadsheet][benchmarks] where
 I evaluated performance differences at differentt stages of the project.
+
+## Future Work
+
+I am going to continue working on this project. I plan the folowing
+contributions nexts, listed by priority:
+
+### 1. Making my changes compatible with old LLVM versions
+
+   Currently, old versions of LLVM and the version with a byte type are not
+   compatible. The primary reason for this is that a string in my version is
+   *always* a `b8` array, whereas in old LLVM version it is an array of `i8`.
+   This makes impossible to parse global variables, defined as:
+
+   ```llvm
+   ; New LLVM
+   @var = global constant [6 x b8] c"Hello\00"
+
+   ; Old LLVM
+   @var = global constant [6 x i8] c"Hello\00"
+   ```
+
+   The solution to this problem is to allows two types of strings: byte and
+   integer ones. At the same time, Clang would produce a byte type string
+   only for C and C++ frontends. For example, LLVM IR above could become:
+
+   ```llvm
+   ; New LLVM
+   @var = global constant [6 x b8] b"Hello\00"
+
+   ; Old LLVM
+   @var = global constant [6 x i8] c"Hello\00"
+   ```
+
+   Moreover, `const` strings are read-only, and therefore a pointter cannot
+   escape through them. Therefore these could be modelled as an array of `i8`.
+   The drawback of this approach is non-uniformity of what can represent a
+   string.
+
+### 2. Fixing all Clang and IR tests
+
+   Clang has numerous test failures due to new code generation for `char` and
+   `unsigned char`. These include simple test failures like checking for an `i8`
+   instead of `b8`, but also have much more complicated cases which are hard to
+   fix automatically:
+
+   - Some target-specific intrinsics also use `char` in their type signature. We
+   need to ensure type compatibility.
+
+   - Currently all tests invloving `i8` strings are wrong. Addresing 1 would
+   help to avoid that issue, adding byte strings only where needed.
+
+### 3. Solving performance issues of `xalancbmk` program
+
+   `xalancbmk` is the last program from SPEC CPU benchmark suite that has
+   *unacceptable* regression in execution time of approximately 4-5%.
+   Interestingly, the regression first appeared when vectorization for
+   `bytecast`s was enabled. My last hypothesis was that `-loop-idiom` pass did
+   not recognise a sequence of stores as a `memset`. As a result, `memset` call
+   was not created and the code was vectorized instead - leading to perfromance
+   regression. However, the fix did not improve the execution time. I plan to
+   investigate the causes of the regression further and bring it to 0% like I
+   did for other programs.
+
+### 4. Blog posts
+
+   I am going to write a series of blog posts covering my work, why
+   LLVM needs a byte type and my experience. These posts are intended to
+   demistify how we can add a byte to LLVM IR, while keeping changes minimal and
+   preserving the correctness. Also, they aim to serve as an example that
+   fundamental changes in LLVM IR are possible and should not be rejected by the
+   community just because "it is too much work". In addition to describing the
+   necessary changes, these blog posts should serve as a valuable resource for
+   junior LLVM developers and contributors (like me!) - describing the API, how
+   to debug LLVM and identify the sources of performance regressions, and how
+   certain optimizations work.
+
+### 5. Further optimisations
+
+   While the results of benchmarking seem promising, there are still a number
+   of optimizations we can implement. For example:
+
+   1. **Propagating `bytecast`s through `phi` nodes**
+
+      To help Scalar Evolution, we can propagate `bytecast`s through `phi`
+      nodes. This would then allow us to apply a `bytecast`, then to find
+      recurrences for an integer value, and finally bitcast the result back. The
+      most obvious use case is a `bytecast` in a loop, which we want to hoist
+      to the header if possible. For example, consider the following C  code:
+
+      ```c
+      void foo(char* c, int n) {
+        *c = 0;
+        for (int i = 0; i < n; ++i)
+          *c += 3;
+      }
+      ```
+
+      The old lowering of `char` to `i8` would produce the follwing optimized IR
+      for this function:
+
+      ```llvm
+      ; Code optimized to `*c = 3 * n;`
+      define void @foo(i8* nocapture %c, i32 %n) {
+      entry:
+        %cmp = icmp sgt i32 %n, 0
+        %0 = trunc i32 %n to i8
+        %1 = mul i8 %0, 3
+        %storemerge = select i1 %cmp, i8 %1, i8 0
+        store i8 %storemerge, i8* %c, align 1
+        ret void
+      }
+      ```
+
+      However, the byte version of this program would produce a diffrent IR,
+      with optimizations blocked at the stage of calulating SCEVs of induction
+      values.
+
+      ```llvm
+      define void @foo(b8* %c, i32 %n) {
+      entry:
+        store b8 bitcast (i8 0 to b8), b8* %c, align 1
+        %cmp3 = icmp slt i32 0, %n
+        br i1 %cmp3, label %for.body.lr.ph, label %for.end
+
+      for.body.lr.ph:
+        %c.promoted = load b8, b8* %c, align 1
+        br label %for.body
+
+      for.body:
+        %i.04 = phi i32 [ 0, %for.body.lr.ph ], [ %inc, %for.inc ]
+
+        ; SCEV does not see this recurrence because of the bytecast!
+        %0 = phi b8 [ %c.promoted, %for.body.lr.ph ], [ %1, %for.inc ]
+        %conv = bytecast b8 %0 to i8
+        %add = add i8 %conv, 3
+        %1 = bitcast i8 %add to b8
+
+        br label %for.inc
+
+      for.inc:
+        %inc = add nuw nsw i32 %i.04, 1
+        %cmp = icmp slt i32 %inc, %n
+        br i1 %cmp, label %for.body, label %for.cond.for.end_crit_edge, !llvm.loop !6
+
+      for.cond.for.end_crit_edge:
+        %.lcssa = phi b8 [ %1, %for.inc ]
+        store b8 %.lcssa, b8* %c, align 1
+        br label %for.end
+
+      for.end:
+        ret void
+      }
+      ```
+
+      The solution to this is to hoist `bytecast` to the header, so that the
+      loop body operates on integer values:
+
+      ```llvm
+      ; ...
+      for.body.lr.ph:
+        %c.promoted = load b8, b8* %c, align 1
+        %c.bytecast = bytecast b8 %c.promoted to i8
+        br label %for.body
+
+      for.body:
+        ; Now the loop body operates on integers only!
+        %0 = phi i8 [ %c.bytecast, %for.body.lr.ph ], [ %add, %for.inc ]
+        %i.04 = phi i32 [ 0, %for.body.lr.ph ], [ %inc, %for.inc ]
+        %add = add i8 %0, 3
+        br label %for.inc
+
+      for.inc:
+        ; ...
+
+      for.cond.for.end_crit_edge:
+        %.lcssa = phi i8 [ %add, %for.inc ]
+        %byte = bitcast i8 %.lcssa to b8
+        store b8 %byte, b8* %c, align 1
+      ```
+
+      I have already implemented this optimization, but due to some test
+      failures had to revert the commit. I plan to investigate what has
+      caused the problem in the future.
+
+   2. **Combining `bytecast`s**
+
+      Multiple `bytecast`s of the same byte within the same basic block can be
+      combined together. This can make IR more readable.
+
+      ```llvm
+      ; Before
+      %b = load b8, b8* %ptr
+      %i1 = bytecast b8 %b to i8
+      %i2 = bytecast b8 %b to i8
+      use(%i1)
+      use(%i2)
+
+      ; After  
+      %b = load b8, b8* %ptr
+      %i = bytecast b8 %b to i8
+      use(%i)
+      use(%i)
+      ``` 
+
+### 6. Changing Alive2 to recognise a byte type
+
+   [Alive2][alive2] does not recognise bytes yet. Adding a byte type to its
+   type system will help to enforce the usefulness of this work. 
 
 ## Acknowledgement
 
@@ -102,6 +311,7 @@ and SPEC CPU benchmarks.
 
 Special thanks to all LLVM community members for their advice and comments.
 
+[alive2]: https://github.com/AliveToolkit/alive2
 [benchmarks]: https://docs.google.com/spreadsheets/d/1TyflQR0NTF2EUw4WERu2Di2od20sI1PIyXXEVbxrmBs/edit?usp=sharing
 [gsoc-2021-dev]: https://github.com/georgemitenkov/llvm-project/commits/gsoc2021-dev
 [progress-tracking]: https://docs.google.com/document/d/1mUaF3D9vEz0HWlsJa6a5vHbJm7y-idKLIq1or5oExqE/edit?usp=sharing
