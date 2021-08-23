@@ -28,6 +28,11 @@ that these posts will be useful to make a point that LLVM needs a byte type, as
 well as that people new to LLVM and who are unable to find up-to-date
 tutorials/resources elsewhere can use them.
 
+*Note: The aim of this document is to provide a **summary** of my GSoC experience, and
+not to describe implementation or design details nor the semantics of a byte type and
+a `bytecast` - that is the purpose
+of the blog posts.*
+
 ## Motivation
 
 It is common for compilers, and LLVM in particular, to transform calls to
@@ -68,7 +73,7 @@ In my proposal I have originally outlined the following aims for the project:
 
 - Make sure that the new LLVM IR can be converted to bitcode and back.
 
-- Implement a lowering of a byte typoe and `bytecast` to SelectionDAG.
+- Implement a lowering of a byte type and `bytecast` to SelectionDAG.
 
 - Fix code generation in  Clang to produce a byte type for `char` and
 `unsigned char`.
@@ -82,6 +87,39 @@ use bytes instead of integers.
 optimizations.
 
 ## Current Results
+
+By the end of my Google Summer of Code project, I have achieved the
+following results:
+
+- Both the byte type and `bytecast` instruction where introduced to LLVM IR.
+I implemented a basic lowering for them in SlectionDAG (byte is mapped to an
+integer, and `bytecast` is a no-op), and adapted the code generation in Clang
+to produce bytes for `unsigned char`/`char` and casts where necessary.
+
+- The wrong type-punning optimizations of `memcpy`,`memmove`, `memcmp` and
+`memset` were fixed. Moreover, I fixed all necessary optimizations to make
+sure that C/C++ programs can be compiled at any optimization level correctly.
+
+- Performance regressions on the [SPECrate2017][spec2017] benchmark suite were
+analysed and fixed. The only program with pending regression (out of 10
+programs) is `xalancbmk`. The table below summarises performance regressions,
+where regression is calculated as:
+
+```
+Regression = [(OldValue - NewValue) / NewValue] x 100%
+```
+
+| Program          | Compile-time regression, % | Execution-time regression, % | Object file size regression, % |
+| ---------------- |---------------------------:|-----------------------------:|-------------------------------:|
+| 500.perlbench_r. | 0.38%                      | -0.88%                       | -0.98%                         |
+| 502.gcc_r.       | 0.37%                      | 0.02%                        | -2.23%                         |
+| 505.mcf_r.       | -5.64%                     | -0.17%                       | -0.19%                         |
+| 520.omnetpp_r.   | -0.08%                     | -0.46%                       | -1.01%                         |
+| 523.xalancbmk_r. | 0.10%                      | -4.83%                       | -0.17%                         |
+| 525.x264_r.      | 0.22%                      | -0.40%                       | -0.01%                         |
+| 531.deepsjeng_r. | 0.56%                      | 0.26%                        | -0.01%                         |
+| 541.leela_r.     | 0.02%                      | -0.01%                       | -0.01%                         |
+| 557.xz_r.        | 0.19%                      | -0.91%                       | 1.84%                          |
 
 ## Contributions
 
@@ -367,3 +405,4 @@ Special thanks to all LLVM community members for their advice and comments.
 [progress-tracking]: https://docs.google.com/document/d/1mUaF3D9vEz0HWlsJa6a5vHbJm7y-idKLIq1or5oExqE/edit?usp=sharing
 [proposal]: https://docs.google.com/document/d/1C6WLgoqoDJCTTSFGK01X8sR2sEccXV5JMabvTHlpOGE/edit?usp=sharing
 [rfc]: https://lists.llvm.org/pipermail/llvm-dev/2021-June/150883.html
+[spec2017]: https://www.spec.org/cpu2017/results/
