@@ -30,7 +30,56 @@ tutorials/resources elsewhere can use them.
 
 ## Motivation
 
+It is common for compilers, and LLVM in particular, to transform calls to
+`memcpy`,`memmove`, `memcmp` and `memset` to a number of integer loads/stores of
+the corresponding bit width. After, load/store instructions can be optimized
+further. However, there are certain problems with this type punning approach.
+
+Firstly, semantics of these functions specify that the memory is
+copied/compared/set as-is in bytes, including the padding bits if necessary. On
+the other hand, in LLVM IR padding is always poison, and loading poison bits
+makes the whole loaded value to be poison as well. If the call to `memcpy` or
+similar function is substituted with an integer load/store pair, then it is
+possible that the copied value turns into poison after the transformation
+(e.g. https://alive2.llvm.org/ce/z/xoCTpH). This problem also affects other C++
+functions that may be lowered to calls to aforementioned functions and
+subsequently to integer load/store pairs (e.g.`uninitialised_copy`).
+
+The second problem comes from the fact that `unsigned char*`, used in `memcpy`
+and other functions' definitions, can alias with any pointer. Hence,
+substituting a call to `memcpy` of a pointer with an integer load/store pair
+may fool the compiler not to see the escape of the pointer, thus breaking the
+alias analysis and the soundness of further optimizations.
+
+The underlying problem is the fact that LLVM IR lowers `unsigned char` or
+similarly the recently introduced `std::byte` to `i8`. While both C and C++
+define these types as handles to the raw bytes of objects, LLVM IR does not
+have a similar type. This means that compiler-introduced type punning can
+break the alias analysis and miss the escaped pointer, as was reported in one
+of the bug reports [here][bug].
+
 ## Aims
+
+In my proposal I have originally outlined the following aims for the project:
+
+- Introduce a byte type to LLVM ecosystem.
+
+- Introduce a `bytecast` instruction to LLVM ecosystem.
+
+- Make sure that the new LLVM IR can be converted to bitcode and back.
+
+- Implement a lowering of a byte typoe and `bytecast` to SelectionDAG.
+
+- Fix code generation in  Clang to produce a byte type for `char` and
+`unsigned char`.
+
+- Implement new optimizations for `memcpy`,`memmove`, `memcmp` and `memset` to
+use bytes instead of integers.
+
+- Make sure that everyting works correclty at `O0` - `O3`.
+
+- Analyze performance regressions, fix broken optimizations, implement new
+optimizations.
 
 ## Current Results
 
@@ -312,6 +361,7 @@ and SPEC CPU benchmarks.
 Special thanks to all LLVM community members for their advice and comments.
 
 [alive2]: https://github.com/AliveToolkit/alive2
+[bug]: https://bugs.llvm.org/show_bug.cgi?id=37469
 [benchmarks]: https://docs.google.com/spreadsheets/d/1TyflQR0NTF2EUw4WERu2Di2od20sI1PIyXXEVbxrmBs/edit?usp=sharing
 [gsoc-2021-dev]: https://github.com/georgemitenkov/llvm-project/commits/gsoc2021-dev
 [progress-tracking]: https://docs.google.com/document/d/1mUaF3D9vEz0HWlsJa6a5vHbJm7y-idKLIq1or5oExqE/edit?usp=sharing
