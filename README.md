@@ -92,7 +92,7 @@ By the end of my Google Summer of Code project, I have achieved the
 following results:
 
 - Both the byte type and `bytecast` instruction where introduced to LLVM IR.
-I implemented a basic lowering for them in SlectionDAG (byte is mapped to an
+I implemented a basic lowering for them in SelectionDAG (byte is mapped to an
 integer, and `bytecast` is a no-op), and adapted the code generation in Clang
 to produce bytes for `unsigned char`/`char` and casts where necessary.
 
@@ -195,7 +195,7 @@ contributions nexts, listed by priority:
    @var = global constant [6 x i8] c"Hello\00"
    ```
 
-   The solution to this problem is to allows two types of strings: byte and
+   The solution to this problem is to allow two types of strings: byte and
    integer ones. At the same time, Clang would produce a byte type string
    only for C and C++ frontends. For example, LLVM IR above could become:
 
@@ -207,10 +207,10 @@ contributions nexts, listed by priority:
    @var = global constant [6 x i8] c"Hello\00"
    ```
 
-   Moreover, `const` strings are read-only, and therefore a pointter cannot
-   escape through them. Therefore these could be modelled as an array of `i8`.
-   The drawback of this approach is non-uniformity of what can represent a
-   string.
+   Moreover, `const` strings are read-only, and hence a pointer cannot
+   escape through them. Therefore these could be modelled as an array of `i8`
+   values. The drawback of this approach is non-uniformity of what can represent
+   a string.
 
 ### 2. Fixing all Clang and IR tests
 
@@ -224,6 +224,9 @@ contributions nexts, listed by priority:
 
    - Currently all tests invloving `i8` strings are wrong. Addresing 1 would
    help to avoid that issue, adding byte strings only where needed.
+
+   - Some tests require insertion of `bytecast`/`bitcast` pairs: this makes
+   rewriting FileCheck directives harder.
 
 ### 3. Solving performance issues of `xalancbmk` program
 
